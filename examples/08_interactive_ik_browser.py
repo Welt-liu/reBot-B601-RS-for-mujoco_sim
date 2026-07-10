@@ -38,6 +38,7 @@ N_ARM_JOINTS = 6
 LINEAR_SPEED = 0.15          # m/s，用于估算轨迹时长
 HTTP_PORT = 8766
 JOY_LINEAR_SPEED = 0.20    # m/s，摇杆推到 100% 对应的最大笛卡尔线速度 (方案 D 速度通道)
+PHONE_ANG_SPEED  = 0.50    # rad/s，手机倾角 45° 时对应的最大末端角速度 (速度通道 → 角速度部分)
 VEL_TIKHONOV   = 1e-6       # 阻尼最小二乘 λ,避免雅可比奇异处关节速度爆掉
 
 # HTML 模板路径
@@ -81,6 +82,12 @@ class _IndexHandler(tornado.web.RequestHandler):
     def get(self) -> None:
         self.set_header("Content-Type", "text/html; charset=utf-8")
         self.write(_load_html())
+
+class _FaviconHandler(tornado.web.RequestHandler):
+    """Return 204 for /favicon.ico to silence browser auto-requests."""
+    def get(self) -> None:
+        self.set_header("Cache-Control", "public, max-age=86400")
+        self.set_status(204)
 
 
 class _WsHandler(tornado.websocket.WebSocketHandler):
@@ -149,7 +156,8 @@ class WebSocketServer:
 
         app = tornado.web.Application(
             [(r"/", _IndexHandler), (r"/ws", _WsHandler),
-                (r"/workspace_constants.json", _ConstantsHandler)],
+                (r"/workspace_constants.json", _ConstantsHandler),
+                (r"/favicon.ico", _FaviconHandler)],
             cmd_queue=self.cmd_queue,
             server=self,
         )
@@ -233,7 +241,9 @@ def main() -> None:
     stop_event = threading.Event()
 
     # ── 速度通道 (方案 D:摇杆不经过 IK / 不进 start_trajectory) ──────────
-    _running_velocity = np.zeros(3)               # (vx, vy, vz) in world frame
+    _running_velocity = np.zeros(6)               # (vx, vy, vz, wx, wy, wz)
+                                                #   前 3 维线速度由摇杆 / Z 按钮驱动 (m/s, world)
+                                                #   后 3 维角速度由手机姿态驱动    (rad/s, world, 屏幕朝上 = 0)
     _velocity_lock = threading.Lock()
     _vel_pin_data = ik.model.createData()         # 复用一次,避免与 ik.data 互踩
     _vel_frame_id = ik.frame_id
@@ -344,22 +354,33 @@ def main() -> None:
                     send_pose(target_pos, np.array([roll, pitch, yaw]))
 
                 elif msg_type == "velocity":
-                    # 摇杆速度通道:浏览器 emitVelocity 发的字段在顶层 (与 target/vx 区分,
-                    # 因为 vx/vy/vz 本身就是值,无需再套一层 values)。
+                    # 速度通道:浏览器在 type=velocity 消息顶层发 vx/vy/vz/wx/wy/wz 六个分量
+                    #   vx/vy/vz ← 摇杆 + Z 按钮  (m/s,  world)
+                    #   wx/wy/wz ← 手机姿态      (rad/s, world, 屏幕朝上 = 0)
                     with _velocity_lock:
                         _running_velocity[:] = (
                             float(msg.get("vx", 0.0)),
                             float(msg.get("vy", 0.0)),
                             float(msg.get("vz", 0.0)),
+                            float(msg.get("wx", 0.0)),
+                            float(msg.get("wy", 0.0)),
+                            float(msg.get("wz", 0.0)),
                         )
-                    _log(ws_server, f"  ⌖ velocity=({_running_velocity[0]:+.3f}, {_running_velocity[1]:+.3f}, {_running_velocity[2]:+.3f}) m/s", "vel")
+                    lin = _running_velocity[:3]
+                    ang = _running_velocity[3:]
+                    _log(
+                        ws_server,
+                        f"  ⌖ vel_lin=({lin[0]:+.3f},{lin[1]:+.3f},{lin[2]:+.3f}) m/s"
+                        f" · vel_ang=({ang[0]:+.3f},{ang[1]:+.3f},{ang[2]:+.3f}) rad/s",
+                        "vel",
+                    )
 
                 # 注:摇杆速度通道不调用 start_trajectory,由主循环 OSC 块直接积分 q_current
 
             # ── 速度通道 vs 轨迹:互斥,速度通道优先生效 ──────────────────
             with _velocity_lock:
                 _vel_active = bool(np.any(np.abs(_running_velocity) > 1e-6))
-                _vel_cmd   = _running_velocity.copy() if _vel_active else np.zeros(3)
+                _vel_cmd   = _running_velocity.copy() if _vel_active else np.zeros(6)
 
             if _vel_active:
                 # 方案 D:Operational Space 速度控制,绕开 IK 与 trajectory
@@ -376,8 +397,7 @@ def main() -> None:
                 # 只取受控关节 (6×6 子矩阵),与 SDK 的 controlled_joints = NUM_JOINTS 一致
                 J = pin.getFrameJacobian(ik.model, _vel_pin_data, _vel_frame_id, pin.LOCAL)[:, :N_ARM_JOINTS]
 
-                v6 = np.zeros(6)
-                v6[:3] = _vel_cmd
+                v6 = _vel_cmd   # 6D: 线速度 (前 3) + 角速度 (后 3) — Jacobian 已经是 6×6
                 JJT = J @ J.T
                 JJT[np.arange(6), np.arange(6)] += VEL_TIKHONOV
                 dq_arm = J.T @ np.linalg.solve(JJT, v6) * dt          # (N_ARM_JOINTS,)

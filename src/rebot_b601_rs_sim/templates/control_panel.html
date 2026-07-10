@@ -36,6 +36,21 @@
     margin-bottom: 8px;
   }
   .header h1 { font-size: 1.15rem; font-weight: 600; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .btn-reconnect {
+    background: #3a3d47; color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; font-size: 0.72rem; font-weight: 600;
+    cursor: pointer; transition: background 0.12s;
+  }
+  .btn-reconnect:hover { background: var(--accent); color: #fff; }
+  .ws-url {
+    font-family: "JetBrains Mono","Consolas",monospace;
+    font-size: 0.66rem; color: #4a5568;
+    margin-bottom: 10px; padding: 4px 8px;
+    background: #14161a; border-radius: 4px;
+    word-break: break-all;
+  }
   .status {
     display: flex; align-items: center; gap: 6px;
     font-size: 0.8rem; font-weight: 500;
@@ -44,7 +59,10 @@
     width: 10px; height: 10px; border-radius: 50%;
     background: var(--warn); transition: background 0.3s;
   }
-  .status.connected .dot { background: var(--green); }
+  .status.connected  .dot { background: var(--green); }
+  .status.retrying   .dot { background: var(--warn);  animation: blink 1s infinite; }
+  .status.failed     .dot { background: var(--red);   }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .pose-display {
     font-family: "JetBrains Mono", "Consolas", monospace;
     font-size: 0.82rem; color: #8a8f98;
@@ -127,21 +145,24 @@
   .ik-feedback.ok { color: var(--green); }
   .ik-feedback.fail { color: var(--red); }
 
-  /* ---- 单行日志 ---- */
-  .log-line {
-    margin-top: 12px; padding: 7px 12px;
+  /* ---- 多行日志队列 (最近 6 条) ---- */
+  .log-list {
+    margin-top: 12px; padding: 8px 10px;
     background: var(--log-bg);
     border: 1px solid var(--border); border-radius: 6px;
     font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.76rem; line-height: 1.4;
-    color: #8899aa; white-space: pre-wrap; word-break: break-all;
-    min-height: 32px;
+    font-size: 0.74rem; line-height: 1.45;
+    color: #8899aa;
+    max-height: 120px; overflow-y: auto;
+    display: flex; flex-direction: column-reverse;
   }
-  .log-line .ts { color: #4a5568; margin-right: 8px; font-size: 0.7rem; }
-  .log-line.tag-ok { color: var(--green); border-color: rgba(76,175,80,0.3); }
-  .log-line.tag-warn { color: var(--warn); border-color: rgba(240,160,48,0.3); }
-  .log-line.tag-err { color: var(--red); border-color: rgba(224,85,85,0.3); }
-  .log-line.tag-home { color: #8899cc; }
+  .log-list-item { display: flex; gap: 6px; padding: 1px 0; word-break: break-all; }
+  .log-list-item .ts { color: #4a5568; font-size: 0.68rem; flex-shrink: 0; }
+  .log-list-item.tag-ok  { color: var(--green); }
+  .log-list-item.tag-warn { color: var(--warn); }
+  .log-list-item.tag-err { color: var(--red); }
+  .log-list-item.tag-home { color: #8899cc; }
+  .log-list-item.tag-vel  { color: #88aaff; }
 
   /* ---- 快捷键 ---- */
   .kbd {
@@ -236,19 +257,57 @@
     font-size: 0.68rem; color: #636873; font-weight: 500;
   }
 
+  /* ---- 手机姿态按钮 (与摇杆并排,启用后把屏幕朝上姿态映射为末端角速度) ---- */
+  .phone-controls {
+    display: flex; flex-direction: column; gap: 6px; align-items: center;
+    margin-left: auto;
+  }
+  .phone-btn {
+    width: 78px; height: 60px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: #23262e; color: var(--text);
+    cursor: pointer; line-height: 1.1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+    font-weight: 600; font-size: 0.72rem;
+    text-align: center;
+  }
+  .phone-btn:hover { background: #363a44; }
+  .phone-btn.active {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+    box-shadow: 0 0 14px 2px rgba(91,155,213,0.4);
+  }
+  .phone-btn .icon { font-size: 1.25rem; line-height: 1; }
+  .phone-btn.error {
+    background: #4a2828; border-color: var(--red); color: #ffb0b0;
+  }
+  .phone-display {
+    font-size: 0.62rem; color: #636873; text-align: center;
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    min-width: 100px; line-height: 1.3;
+  }
+  .phone-display.active { color: var(--accent); }
+  .phone-display.error  { color: var(--red); }
+
 </style>
 </head>
 <body>
 <div class="panel">
   <div class="header">
     <h1>B601-RS 控制</h1>
-    <div class="status" id="status">
-      <span class="dot"></span> <span id="status-text">连接中…</span>
+    <div class="header-right">
+      <div class="status" id="status">
+        <span class="dot"></span> <span id="status-text">连接中…</span>
+      </div>
+      <button class="btn-reconnect" id="btn-reconnect" title="立即重连 WebSocket">重连</button>
     </div>
   </div>
+  <div class="ws-url" id="ws-url">WS: …</div>
   <div class="pose-display" id="pose-display">末端: --</div>
 
-    <div class="log-line" id="log-line"></div>
+    <div class="log-list" id="log-list"></div>
 
   <div class="section-label">位置 (m)</div>
 
@@ -267,6 +326,12 @@
       <button class="z-btn" id="z-up" title="Z+">▲</button>
       <span class="z-label">Z</span>
       <button class="z-btn" id="z-down" title="Z-">▼</button>
+    </div>
+    <div class="phone-controls">
+      <button class="phone-btn" id="phone-btn" title="开启后:把手机姿态(屏幕朝上=零位)映射到末端角速度,作为速度通道输入">
+        <span class="icon">📱</span>Phone
+      </button>
+      <span class="phone-display" id="phone-display">姿态: 关</span>
     </div>
   </div>
 
@@ -328,27 +393,86 @@
 
 <script>
   const SLIDERS = ["x","y","z","roll","pitch","yaw"];
-  const WS_URL = `ws://${location.host}/ws`;
+  // HTTPS 页面下必须用 wss://,否则浏览器因 mixed content 静默拒绝,
+  // 表现为 status 永远停在 "连接中"、onopen 永远不触发。
+  const WS_PROTO = location.protocol === "https:" ? "wss:" : "ws:";
+  const WS_URL = `${WS_PROTO}//${location.host}/ws`;
+  // 启动时把 WS URL 写在头部下方,一眼能看到实际连接地址
+  document.getElementById("ws-url").textContent = `WS: ${WS_URL}`;
   let ws = null;
   let reconnectTimer = null;
+  let reconnectCountdownTimer = null;
+  let reconnectAttempts = 0;
 
-  function setStatus(connected) {
+  // 状态多态: "connecting" | "connected" | "retrying" (extra=秒数) | "failed" (extra=原因)
+  function setStatus(state, extra) {
     const el = document.getElementById("status");
     const text = document.getElementById("status-text");
-    el.classList.toggle("connected", connected);
-    text.textContent = connected ? "已连接" : "连接中…";
+    el.classList.remove("connected", "retrying", "failed");
+    if (reconnectCountdownTimer) {
+      clearInterval(reconnectCountdownTimer);
+      reconnectCountdownTimer = null;
+    }
+    if (state === "connected") {
+      el.classList.add("connected");
+      text.textContent = "已连接";
+    } else if (state === "retrying") {
+      el.classList.add("retrying");
+      const secs = extra != null ? extra : 2;
+      text.textContent = `等待重试 ${secs}s (#${reconnectAttempts})`;
+      let left = secs;
+      reconnectCountdownTimer = setInterval(() => {
+        left -= 1;
+        if (left <= 0) { clearInterval(reconnectCountdownTimer); reconnectCountdownTimer = null; return; }
+        const t = document.getElementById("status-text");
+        if (t) t.textContent = `等待重试 ${left}s (#${reconnectAttempts})`;
+      }, 1000);
+    } else if (state === "failed") {
+      el.classList.add("failed");
+      text.textContent = extra || "连接失败";
+    } else {
+      // connecting
+      text.textContent = "连接中…";
+    }
   }
 
   function connect() {
-    if (ws && ws.readyState === WebSocket.OPEN) return;
-    ws = new WebSocket(WS_URL);
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    setStatus("connecting");
+    try {
+      ws = new WebSocket(WS_URL);
+    } catch (err) {
+      appendLog("❌ WebSocket 构造失败: " + err, "err");
+      setStatus("failed", `构造失败: ${err}`);
+      scheduleReconnect();
+      return;
+    }
     ws.onopen = () => {
-      setStatus(true);
+      reconnectAttempts = 0;
+      setStatus("connected");
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      console.log("[WS] open", WS_URL);
+      appendLog(`✓ WS 已连接 (${WS_URL})`, "ok");
     };
-    ws.onclose = () => {
-      setStatus(false);
-      reconnectTimer = setTimeout(connect, 2000);
+    ws.onerror = (ev) => {
+      // Chrome / Android 上 onerror 后通常紧跟 onclose,这里只打日志
+      console.warn("[WS] error", WS_URL, "readyState=", ws ? ws.readyState : "?", ev);
+      appendLog(`⚠️ WS 错误 (readyState=${ws ? ws.readyState : "?"})`, "warn");
+    };
+    ws.onclose = (e) => {
+      const reason = e && e.code !== undefined
+        ? `code=${e.code}` + (e.reason ? ` reason=${e.reason}` : "")
+        : "";
+      console.warn("[WS] close", WS_URL, reason);
+      appendLog(`✗ WS 关闭 ${reason || "(无 reason)"}`, "warn");
+      // 持续失败时,在状态栏给一个明显的诊断信息
+      if (reconnectAttempts >= 2) {
+        const hint = !PHONE_PAGE_IS_SECURE
+          ? "可能需要 HTTPS 服务器"
+          : (WS_PROTO === "wss:" ? "服务器可能没起 TLS" : "服务器不可达");
+        setStatus("failed", `连续失败 (${reason || "code=?"}) · ${hint}`);
+      }
+      scheduleReconnect();
     };
     ws.onmessage = (evt) => {
       try {
@@ -382,13 +506,45 @@
     };
   }
 
+  // 手动重连 (右上角按钮)
+  document.getElementById("btn-reconnect").addEventListener("click", () => {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (reconnectCountdownTimer) { clearInterval(reconnectCountdownTimer); reconnectCountdownTimer = null; }
+    if (ws) {
+      try { ws.close(); } catch (e) {}
+      ws = null;
+    }
+    reconnectAttempts = 0;
+    setStatus("connecting");
+    appendLog("🔄 手动重连…", "warn");
+    connect();
+  });
+
+  // 退避重连 (2s 起步,封顶 10s,带倒计时)
+  function scheduleReconnect() {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    reconnectAttempts += 1;
+    const delay = Math.min(2 * Math.max(1, reconnectAttempts), 10);
+    setStatus("retrying", delay);
+    reconnectTimer = setTimeout(connect, delay * 1000);
+  }
+
   // ── 日志 (仅保留最新一条) ──
+  const LOG_MAX = 6;
   function appendLog(text, tag) {
-    const el = document.getElementById("log-line");
+    // 同步打到 console,移动端通过 chrome://inspect 可以看到
+    const tagUp = (tag || "").toUpperCase();
+    const fn = tagUp === "ERR" ? console.error : tagUp === "WARN" ? console.warn : console.log;
+    fn(`[${tagUp || "LOG"}]`, text);
+    const list = document.getElementById("log-list");
     const now = new Date();
     const ts = now.toTimeString().slice(0,8);
-    el.className = "log-line" + (tag ? " tag-" + tag : "");
-    el.innerHTML = `<span class="ts">${ts}</span>${text}`;
+    const item = document.createElement("div");
+    item.className = "log-list-item" + (tag ? " tag-" + tag : "");
+    item.innerHTML = `<span class="ts">${ts}</span><span>${text}</span>`;
+    list.appendChild(item);
+    // 截断到最近 LOG_MAX 条
+    while (list.children.length > LOG_MAX) list.removeChild(list.firstChild);
   }
 
   // ── 控制 ──
@@ -484,8 +640,13 @@
       if (joyState.active || zBtnState.active) {
         joyState.active = false; joyState.vx = 0; joyState.vy = 0;
         if (zBtnState.active) { zBtnState.active = false; zBtnState.dir = 0; }
+        // 只清线速度,角速度通道 (手机) 保持不变 — 与手机姿态可同时驱动末端
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({type: "velocity", vx: 0, vy: 0, vz: 0}));
+          ws.send(JSON.stringify({
+            type: "velocity",
+            vx: 0, vy: 0, vz: 0,
+            wx: velState.wx, wy: velState.wy, wz: velState.wz,
+          }));
         }
       }
       if (!_serverSync && document.getElementById("auto-send").checked) sendTarget();
@@ -552,7 +713,22 @@
   }
   requestAnimationFrame(tick);
 
-  // ── 摇杆 (增量, X↔Y 对调) ──
+  // ── 共享速度状态 (6D) ──
+  //   vx/vy/vz ← 摇杆 + Z 按钮  (m/s)
+  //   wx/wy/wz ← 手机姿态      (rad/s, 由 📱 按钮启用)
+  // 每次 emit 都发完整 6 维;后端 OSC 用全 6D 雅可比积分 q_current。
+  const velState = { vx: 0, vy: 0, vz: 0, wx: 0, wy: 0, wz: 0 };
+
+  function emitVelState() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: "velocity",
+      vx: velState.vx, vy: velState.vy, vz: velState.vz,
+      wx: velState.wx, wy: velState.wy, wz: velState.wz,
+    }));
+  }
+
+  // ── 摇杆 (X↔Y 对调,只动 vx/vy;同时清 vz,避免与 Z 按钮叠加) ──
   (function initJoystick() {
     const pad = document.getElementById("joystick-pad");
     const knob = document.getElementById("joystick-knob");
@@ -563,13 +739,11 @@
     const JOY_VMAX = 0.20;
 
     function emitVelocity() {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({
-        type: "velocity",
-        vx: joyState.vx * JOY_VMAX,
-        vy: joyState.vy * JOY_VMAX,
-        vz: 0,
-      }));
+      velState.vx = joyState.vx * JOY_VMAX;
+      velState.vy = joyState.vy * JOY_VMAX;
+      velState.vz = 0;                  // 摇杆取消 Z 通道 (互斥)
+      // wx/wy/wz 保持 — 手机角速度通道与摇杆并行,互不干扰
+      emitVelState();
     }
 
     function resetKnob() {
@@ -623,15 +797,12 @@
   let _z_vel_tick = 0;                  // heartbeat 计时器 (见 tick())
 
   function emitZVelocity() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    // 注意:同时发送当前 vx/vy 也置 0 + 把 joystick 的方向也置 0,
-    //        这样 Z 按钮按下时与摇杆不会在 OSC 处叠加
-    ws.send(JSON.stringify({
-      type: "velocity",
-      vx: 0,
-      vy: 0,
-      vz: zBtnState.active ? zBtnState.dir * VZ_MAX : 0.0,
-    }));
+    // 注意:同时把 vx/vy 也置 0,这样 Z 按钮按下时与摇杆不会在 OSC 处叠加
+    //       wx/wy/wz 保持 — 允许 Z 移动 + 手机角速度旋转同时进行
+    velState.vz = zBtnState.active ? zBtnState.dir * VZ_MAX : 0.0;
+    velState.vx = 0;
+    velState.vy = 0;
+    emitVelState();
   }
 
   (function initZButtons() {
@@ -669,39 +840,254 @@
     zDown.addEventListener("touchcancel", _zRelease);
   })();
 
-  // ── 键盘: 按下/松开设置状态, rAF 累加器驱动 ──
-  const KB_MAP = {
-    q: ["x", -1], a: ["x", 1],
-    w: ["y", -1], s: ["y", 1],
-    e: ["z", -1], d: ["z", 1],
-    r: ["roll", -1], f: ["roll", 1],
-    t: ["pitch", -1], g: ["pitch", 1],
-    y: ["yaw", -1], h: ["yaw", 1],
-  };
-  let _flashTimer = null;
+  // ── 手机姿态 (速度通道 → 末端角速度 wx/wy/wz) ──
+  // 单一路径: WebXR inline session (Android Chrome / Edge / Samsung Internet)。
+  // 屏幕朝上 (任意方向) 在按钮按下瞬间被快照为零位,倾角 → 角速度 (线性 + 截断到 45°)。
+  const PHONE_ANG_MAX  = 0.50;                              // rad/s,与后端 PHONE_ANG_SPEED 对齐
+  const PHONE_TILT_FULL = Math.PI / 4;                       // rad (45°), 满倾角
+  const PHONE_W_GAIN    = PHONE_ANG_MAX / PHONE_TILT_FULL;   // rad/s per rad
+  const PHONE_SIGNAL_TIMEOUT_MS = 1500;                      // "无信号" 看门狗时长
 
-  function flashSlider(id) {
-    const grp = document.getElementById(id).closest(".slider-group");
-    grp.classList.add("highlight");
-    clearTimeout(_flashTimer);
-    _flashTimer = setTimeout(() => grp.classList.remove("highlight"), 600);
+  const phoneState = {
+    active: false,                 // 按钮是否启用
+    ref: null,                     // 屏幕朝上零位快照 (euler rad: {roll, pitch, yaw})
+    wx: 0, wy: 0, wz: 0,           // 当前推算的角速度 (rad/s)
+    hasSignal: false,              // 启用后是否拿到过有效 XR pose
+    signalTimer: null,             // 看门狗 setTimeout id
+    xrSession: null,               // 当前 WebXR XRSession
+    xrRefSpace: null,              // XRReferenceSpace (local)
+  };
+
+  // WebXR 要求安全上下文 (HTTPS 或 localhost)。
+  const PHONE_PAGE_IS_SECURE =
+    location.protocol === "https:" ||
+    location.hostname === "localhost" ||
+    location.hostname === "127.0.0.1" ||
+    /^10\./.test(location.hostname)            ||
+    /^192\.168\./.test(location.hostname)      ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(location.hostname);
+
+  function phoneWebXRSupported() {
+    return typeof navigator !== "undefined"
+        && !!navigator.xr
+        && typeof navigator.xr.isSessionSupported === "function";
   }
 
-  document.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-    const key = e.key.toLowerCase();
-    if (!(key in KB_MAP)) return;
-    e.preventDefault();
-    if (!e.repeat) { keyState[key] = true; flashSlider(KB_MAP[key][0]); }
-  });
-  document.addEventListener("keyup", (e) => {
-    const key = e.key.toLowerCase();
-    keyState[key] = false;
-  });
+  // quaternion (x, y, z, w) → euler (roll, pitch, yaw) (ZYX intrinsic, rad)
+  function phoneQuatToEuler(qx, qy, qz, qw) {
+    const sinr_cosp = 2 * (qw * qx + qy * qz);
+    const cosr_cosp = 1 - 2 * (qx * qx + qy * qy);
+    const roll  = Math.atan2(sinr_cosp, cosr_cosp);
 
-  // 服务端位姿回传 → 同步滑块
-  // (已通过 ws.onmessage pose 处理中的 _serverSync 标志同步)
-  connect();
+    const sinp = 2 * (qw * qy - qz * qx);
+    const pitch = Math.abs(sinp) >= 1
+      ? Math.sign(sinp) * Math.PI / 2
+      : Math.asin(sinp);
+
+    const siny_cosp = 2 * (qw * qz + qx * qy);
+    const cosy_cosp = 1 - 2 * (qy * qy + qz * qz);
+    const yaw   = Math.atan2(siny_cosp, cosy_cosp);
+
+    return { roll, pitch, yaw };
+  }
+
+  function phoneClampTilt(x) {
+    return Math.max(-PHONE_TILT_FULL, Math.min(PHONE_TILT_FULL, x));
+  }
+
+  function phoneSetDisplay(text, mode /* "active" | "error" | null */) {
+    const disp = document.getElementById("phone-display");
+    disp.classList.remove("active", "error");
+    if (mode) disp.classList.add(mode);
+    disp.textContent = text;
+  }
+
+  // 把 (roll/pitch/yaw) deltas 映射到 velState 并显示
+  function phoneApplyDeltas(dRoll, dPitch, dYaw) {
+    // 符号约定 (手感不对时,翻转相应符号即可):
+    //   wx (pitch) ← -dPitch  俯仰
+    //   wy (roll)  ← +dRoll   翻滚
+    //   wz (yaw)   ← -dYaw    偏航
+    phoneState.wx = -phoneClampTilt(dPitch) * PHONE_W_GAIN;
+    phoneState.wy =  phoneClampTilt(dRoll)  * PHONE_W_GAIN;
+    phoneState.wz = -phoneClampTilt(dYaw)   * PHONE_W_GAIN;
+    velState.wx = phoneState.wx;
+    velState.wy = phoneState.wy;
+    velState.wz = phoneState.wz;
+    emitVelState();
+    const f = (v) => (v * 180 / Math.PI).toFixed(0).padStart(3, " ");
+    phoneSetDisplay(
+      `P=${f(dPitch)}° R=${f(dRoll)}° Y=${f(dYaw)}° · ω_max=${PHONE_ANG_MAX.toFixed(2)}`,
+      "active",
+    );
+  }
+
+  function phoneMarkSignal() {
+    if (!phoneState.hasSignal) {
+      phoneState.hasSignal = true;
+      phoneClearSignalWatchdog();
+    }
+  }
+
+  // "无信号" 看门狗 — 启用按钮 1.5s 后仍无 XR pose → 提示用户
+  function phoneStartSignalWatchdog() {
+    phoneClearSignalWatchdog();
+    phoneState.signalTimer = setTimeout(() => {
+      if (!phoneState.active) return;
+      if (phoneState.hasSignal) return;
+      const hint = PHONE_PAGE_IS_SECURE
+        ? "无信号 (WebXR 追踪丢失?)"
+        : "无信号 (需 HTTPS)";
+      phoneSetDisplay(`姿态: ${hint}`, "error");
+      appendLog(`⚠️ 启用后 ${PHONE_SIGNAL_TIMEOUT_MS}ms 未收到 XR pose,${hint}`, "warn");
+    }, PHONE_SIGNAL_TIMEOUT_MS);
+  }
+
+  function phoneClearSignalWatchdog() {
+    if (phoneState.signalTimer != null) {
+      clearTimeout(phoneState.signalTimer);
+      phoneState.signalTimer = null;
+    }
+  }
+
+  // ── WebXR session 建立 ────────────────────────────────────────────────
+  async function phoneStartWebXR() {
+    if (!phoneWebXRSupported()) {
+      return { ok: false, reason: "no-webxr-api" };
+    }
+    let session = null;
+    let mode = null;
+    try {
+      if (await navigator.xr.isSessionSupported("inline")) {
+        session = await navigator.xr.requestSession("inline");
+        mode = "inline";
+      } else if (await navigator.xr.isSessionSupported("immersive-ar")) {
+        session = await navigator.xr.requestSession("immersive-ar", {
+          requiredFeatures: ["local"],
+        });
+        mode = "immersive-ar";
+      } else {
+        return { ok: false, reason: "no-mode" };
+      }
+    } catch (err) {
+      appendLog("❌ WebXR requestSession 失败: " + err, "err");
+      return { ok: false, reason: "request-failed" };
+    }
+
+    let refSpace;
+    try {
+      refSpace = await session.requestReferenceSpace("local");
+    } catch (err) {
+      appendLog("❌ WebXR requestReferenceSpace 失败: " + err, "err");
+      try { session.end(); } catch (e) {}
+      return { ok: false, reason: "refspace-failed" };
+    }
+
+    phoneState.xrSession  = session;
+    phoneState.xrRefSpace = refSpace;
+    appendLog(`✓ WebXR ${mode} session 已建立`, "ok");
+
+    // 监听 session 外部结束 (浏览器后台 / 用户按停止)
+    session.addEventListener("end", () => {
+      appendLog("⚠️ WebXR session 已结束", "warn");
+      if (phoneState.active) {
+        phoneStop(/* silent */ true);
+      }
+    });
+
+    // XR 帧循环 — pose 每帧可能 null (追踪丢失)
+    function onXRFrame(time, frame) {
+      if (!phoneState.active || !phoneState.xrSession) return;
+      const pose = frame.getViewerPose(phoneState.xrRefSpace);
+      if (pose) {
+        const t = pose.transform;
+        if (t && t.orientation) {
+          const o = t.orientation;
+          const { roll, pitch, yaw } = phoneQuatToEuler(o.x, o.y, o.z, o.w);
+          phoneMarkSignal();
+          if (!phoneState.ref) {
+            phoneState.ref = { roll, pitch, yaw };
+            phoneSetDisplay(
+              `P=  0° R=  0° Y=  0° · ω_max=${PHONE_ANG_MAX.toFixed(2)}rad/s`,
+              "active",
+            );
+          } else {
+            const ref = phoneState.ref;
+            let dYaw = yaw - ref.yaw;
+            dYaw = ((dYaw + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+            phoneApplyDeltas(roll - ref.roll, pitch - ref.pitch, dYaw);
+          }
+        }
+      }
+      try { phoneState.xrSession.requestAnimationFrame(onXRFrame); }
+      catch (e) { /* session 已被 end,忽略 */ }
+    }
+    session.requestAnimationFrame(onXRFrame);
+    return { ok: true };
+  }
+
+  // ── 关闭 / 清理 ───────────────────────────────────────────────────────
+  function phoneStop(silent) {
+    phoneClearSignalWatchdog();
+    phoneState.active    = false;
+    phoneState.ref       = null;
+    phoneState.hasSignal = false;
+    phoneState.wx = phoneState.wy = phoneState.wz = 0;
+    velState.wx = velState.wy = velState.wz = 0;
+
+    if (phoneState.xrSession) {
+      try { phoneState.xrSession.end(); } catch (e) {}
+    }
+    phoneState.xrSession  = null;
+    phoneState.xrRefSpace = null;
+
+    const btn  = document.getElementById("phone-btn");
+    const disp = document.getElementById("phone-display");
+    btn.classList.remove("active", "error");
+    disp.classList.remove("active", "error");
+    disp.textContent = "姿态: 关";
+    emitVelState();
+    if (!silent) appendLog("📱 手机姿态通道已关闭", "warn");
+  }
+
+  // ── 主开关 ────────────────────────────────────────────────────────────
+  async function togglePhone() {
+    if (phoneState.active) {
+      phoneStop(false);
+      return;
+    }
+    if (!PHONE_PAGE_IS_SECURE) {
+      appendLog("⚠️ 当前页面不是 HTTPS,WebXR 在 Android 上无法工作", "warn");
+    }
+    if (!phoneWebXRSupported()) {
+      phoneSetDisplay("姿态: 不支持", "error");
+      document.getElementById("phone-btn").classList.add("error");
+      appendLog("❌ 当前浏览器不支持 WebXR (navigator.xr 缺失)", "err");
+      return;
+    }
+
+    const result = await phoneStartWebXR();
+    if (!result.ok) {
+      phoneSetDisplay(`姿态: 启动失败 (${result.reason})`, "error");
+      document.getElementById("phone-btn").classList.add("error");
+      appendLog(`❌ WebXR 启动失败: ${result.reason}`, "err");
+      return;
+    }
+
+    // 进入激活态 — 第一次 XR pose 到来时 ref 才被设定
+    phoneState.active    = true;
+    phoneState.hasSignal = false;
+    phoneState.ref       = null;
+
+    const btn = document.getElementById("phone-btn");
+    btn.classList.add("active");
+    btn.classList.remove("error");
+    phoneSetDisplay("姿态: 校准中…", "active");
+    phoneStartSignalWatchdog();
+    appendLog("📱 姿态通道已启用 (WebXR),请保持屏幕朝上后倾斜手机控制末端", "ok");
+  }
+
+  document.getElementById("phone-btn").addEventListener("click", togglePhone);
 </script>
 </body>
 </html>
